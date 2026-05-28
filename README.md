@@ -11,6 +11,12 @@ Simple FastAPI, HTMX, Celery, Redis, and MongoDB monitoring app.
 - Runs separate Celery tasks for server status, connection counts, current operations, database stats, and collection stats.
 - Supports optional HTTP Basic auth for the whole app through `.env`.
 
+## Screenshots
+![Dashboard showing metrics connection status](./docs/image-1.png)
+![Dashboard showing metrics current operations](./docs/image-2.png)
+
+
+
 ## Run locally with Docker
 
 Create an env file:
