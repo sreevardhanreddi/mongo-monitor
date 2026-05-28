@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mx-auto max-w-2xl">
+  <div class="mb-5">
+    <a href="/" class="text-sm text-stone-400 hover:text-stone-200">Back to targets</a>
+    <h1 class="mt-2 text-2xl font-semibold text-stone-50">Add MongoDB Target</h1>
+  </div>
+  <section class="rounded-lg border border-stone-800 bg-stone-900 p-5">
+    <form id="monitor-form" class="space-y-5">
+      <label class="block">
+        <span class="text-sm font-medium text-stone-300">Name</span>
+        <input name="name" required
+          class="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none focus:border-emerald-500"
+          placeholder="Production MongoDB">
+      </label>
+      <label class="block">
+        <span class="text-sm font-medium text-stone-300">Connection string</span>
+        <textarea name="uri" required rows="5"
+          class="mt-1 w-full resize-y rounded-md border border-stone-700 bg-stone-950 px-3 py-2 font-mono text-sm text-stone-100 outline-none focus:border-emerald-500"
+          placeholder="mongodb://user:password@host:27017/database?authSource=admin"></textarea>
+      </label>
+      <label class="block max-w-xs">
+        <span class="text-sm font-medium text-stone-300">Timeout ms</span>
+        <input name="timeout_ms" type="number" min="250" max="30000" value="2500"
+          class="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none focus:border-emerald-500">
+      </label>
+      <p id="form-error" class="hidden rounded-md border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200"></p>
+      <div class="flex flex-wrap justify-end gap-2 border-t border-stone-800 pt-5">
+        <a href="/"
+          class="rounded-md border border-stone-700 px-3 py-2 text-sm font-medium text-stone-200 hover:bg-stone-800">Cancel</a>
+        <button class="rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-stone-950 hover:bg-emerald-400">Add
+          target</button>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById("monitor-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const error = document.getElementById("form-error");
+    const payload = {
+      name: form.name.value,
+      uri: form.uri.value,
+      timeout_ms: Number(form.timeout_ms.value),
+      enabled: true,
+    };
+    const response = await fetch("/api/monitors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      error.textContent = await response.text();
+      error.classList.remove("hidden");
+      return;
+    }
+    const monitor = await response.json();
+    location.href = `/monitors/${monitor.id}`;
+  });
+</script>
+{% endblock %}

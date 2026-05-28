@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en" class="h-full bg-stone-950">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or "MongoDB Monitoring" }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  {% block head %}{% endblock %}
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+
+<body class="min-h-full bg-stone-950 text-stone-100">
+  <div class="border-b border-stone-800 bg-stone-950/95">
+    <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
+      <a href="/" class="text-lg font-semibold tracking-normal text-stone-50">MongoDB Monitoring</a>
+      <div class="flex items-center gap-3 text-sm text-stone-400">
+        <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+        <span>Live metrics</span>
+      </div>
+    </div>
+  </div>
+  <main class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    window.App = (() => {
+      const numberFormatter = new Intl.NumberFormat();
+      const dateTimeFormatter = new Intl.DateTimeFormat([], {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short",
+      });
+      const shortDateTimeFormatter = new Intl.DateTimeFormat([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      });
+
+      function esc(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+      }
+
+      function formatDateTime(value, options = {}) {
+        if (!value) return options.empty ?? "";
+        const input = typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value) && !/(Z|[+-]\d{2}:?\d{2})$/.test(value) ? `${value}Z` : value;
+        const date = new Date(input);
+        if (Number.isNaN(date.getTime())) return String(value);
+        return (options.short ? shortDateTimeFormatter : dateTimeFormatter).format(date);
+      }
+
+      function formatNumber(value) {
+        return numberFormatter.format(Number(value || 0));
+      }
+
+      function humanBytes(value) {
+        if (value == null || value === "") return "--";
+        let size = Number(value);
+        if (Number.isNaN(size)) return "--";
+        for (const unit of ["B", "KB", "MB", "GB", "TB", "PB"]) {
+          if (Math.abs(size) < 1024 || unit === "PB") return unit === "B" ? `${Math.round(size)} B` : `${size.toFixed(1)} ${unit}`;
+          size /= 1024;
+        }
+      }
+
+      function sortableValue(row, column) {
+        const value = column.value(row);
+        if (column.type === "number" || column.type === "date") return Number(value || 0);
+        return String(value ?? "").toLowerCase();
+      }
+
+      function createSortableTable({ table, body, columns, emptyHtml, initialSort }) {
+        const header = table.querySelector("thead");
+        let rows = [];
+        let sortState = initialSort || { key: columns[0].key, direction: "asc" };
+
+        header.innerHTML = `<tr>${columns.map((column) => `
+            <th class="px-4 py-3 font-medium">
+              <button class="sort-button" data-sort="${esc(column.key)}" type="button">
+                <span>${esc(column.label)}</span><span class="sort-indicator ml-1 text-stone-600"></span>
+              </button>
+            </th>`).join("")}</tr>`;
+
+        function render() {
+          if (!rows.length) {
+            body.innerHTML = emptyHtml;
+            return;
+          }
+          const sortedRows = [...rows].sort((a, b) => {
+            const column = columns.find((item) => item.key === sortState.key) || columns[0];
+            const aValue = sortableValue(a, column);
+            const bValue = sortableValue(b, column);
+            const result = column.type === "number" || column.type === "date" ? aValue - bValue : aValue.localeCompare(bValue);
+            return sortState.direction === "asc" ? result : -result;
+          });
+          body.innerHTML = sortedRows.map((row) => `<tr class="hover:bg-stone-800/40">${columns.map((column) => column.render(row)).join("")}</tr>`).join("");
+          header.querySelectorAll(".sort-button").forEach((button) => {
+            const indicator = button.querySelector(".sort-indicator");
+            indicator.textContent = button.dataset.sort === sortState.key ? (sortState.direction === "asc" ? "↑" : "↓") : "";
+          });
+        }
+
+        header.querySelectorAll(".sort-button").forEach((button) => {
+          button.addEventListener("click", () => {
+            if (sortState.key === button.dataset.sort) sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
+            else sortState = { key: button.dataset.sort, direction: columns.find((column) => column.key === button.dataset.sort)?.defaultDirection || "asc" };
+            render();
+          });
+        });
+
+        return {
+          setRows(nextRows) {
+            rows = nextRows || [];
+            render();
+          },
+        };
+      }
+
+      return { createSortableTable, esc, formatDateTime, formatNumber, humanBytes };
+    })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+
+</html>

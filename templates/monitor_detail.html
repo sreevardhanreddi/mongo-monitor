@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+  <div>
+    <a href="/" class="text-sm text-stone-400 hover:text-stone-200">Back to targets</a>
+    <h1 id="monitor-name" class="mt-2 text-2xl font-semibold text-stone-50">Monitor</h1>
+    <p id="monitor-uri" class="mt-1 break-all text-sm text-stone-500"></p>
+  </div>
+  <div class="flex flex-wrap justify-end gap-2">
+    <a href="/monitors/{{ monitor_id }}/storage"
+      class="rounded-md border border-stone-700 px-3 py-2 text-sm font-medium text-stone-200 hover:bg-stone-800">DB
+      stats</a>
+    <a href="/monitors/{{ monitor_id }}/current-ops"
+      class="rounded-md border border-stone-700 px-3 py-2 text-sm font-medium text-stone-200 hover:bg-stone-800">Current
+      ops</a>
+    <button id="check-now"
+      class="rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-stone-950 hover:bg-emerald-400">Check
+      now</button>
+    <button id="delete-target"
+      class="rounded-md border border-red-800 px-3 py-2 text-sm font-medium text-red-200 hover:bg-red-950/50">Delete
+      target</button>
+  </div>
+</div>
+
+<div id="check-message"
+  class="mb-4 hidden rounded-md border border-emerald-800 bg-emerald-950/40 px-3 py-2 text-sm text-emerald-200"></div>
+
+<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+  <section class="rounded-lg border border-stone-800 bg-stone-900 p-4">
+    <div class="text-xs text-stone-500">Status</div>
+    <div id="status-state" class="mt-2 text-2xl font-semibold text-stone-300">pending</div>
+  </section>
+  <section class="rounded-lg border border-stone-800 bg-stone-900 p-4">
+    <div class="text-xs text-stone-500">Connections</div>
+    <div id="connection-current" class="mt-2 text-2xl font-semibold text-stone-50">--</div>
+    <div id="connection-available" class="mt-1 text-xs text-stone-500">Available --</div>
+  </section>
+  <section class="rounded-lg border border-stone-800 bg-stone-900 p-4">
+    <div class="text-xs text-stone-500">Current Ops</div>
+    <div id="ops-active" class="mt-2 text-2xl font-semibold text-stone-50">--</div>
+    <div id="ops-total" class="mt-1 text-xs text-stone-500">Total --</div>
+  </section>
+  <section class="rounded-lg border border-stone-800 bg-stone-900 p-4">
+    <div class="text-xs text-stone-500">Latency</div>
+    <div id="status-latency" class="mt-2 text-2xl font-semibold text-stone-50">--</div>
+  </section>
+</div>
+
+<div id="status-error" class="mt-4 hidden rounded-lg border border-red-900/60 bg-red-950/30 p-4 text-sm text-red-200">
+</div>
+
+<section class="mt-6 rounded-lg border border-stone-800 bg-stone-900">
+  <div class="flex flex-col gap-3 border-b border-stone-800 p-4 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h2 class="text-base font-semibold text-stone-50">Metric History</h2>
+      <p id="chart-window-label" class="mt-1 text-xs text-stone-500">Last 1000 samples</p>
+    </div>
+    <label class="flex items-center gap-2 text-sm text-stone-300">
+      <span>Window</span>
+      <select id="metric-window"
+        class="rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none focus:border-emerald-500">
+        <option value="last_1000">Last 1000 samples</option>
+        <option value="30d">30 days, hourly</option>
+        <option value="90d">90 days, hourly</option>
+        <option value="180d">180 days, hourly</option>
+        <option value="365d">365 days, hourly</option>
+      </select>
+    </label>
+  </div>
+  <div class="space-y-6 p-4">
+    <div class="rounded-md border border-stone-800 bg-stone-950/40 p-4">
+      <h2 class="text-base font-semibold text-stone-50">Connection History</h2>
+      <div class="mt-3 h-72"><canvas id="connections-chart"></canvas></div>
+    </div>
+    <div class="rounded-md border border-stone-800 bg-stone-950/40 p-4">
+      <h2 class="text-base font-semibold text-stone-50">Current Ops</h2>
+      <div class="mt-3 h-72"><canvas id="current-ops-chart"></canvas></div>
+    </div>
+    <div class="rounded-md border border-stone-800 bg-stone-950/40 p-4">
+      <h2 class="text-base font-semibold text-stone-50">Server Checks</h2>
+      <div class="mt-3 h-72"><canvas id="server-checks-chart"></canvas></div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
+<script>
+  const monitorId = "{{ monitor_id }}";
+  const charts = {};
+  Chart.defaults.color = "#d6d3d1";
+  Chart.defaults.font.family = "Inter, ui-sans-serif, system-ui, sans-serif";
+
+  function labelFor(row) {
+    return App.formatDateTime(row.checked_at, { short: true });
+  }
+
+  function setStatusClass(el, state) {
+    el.className = "mt-2 text-2xl font-semibold " + (state === "up" ? "text-emerald-300" : state === "down" ? "text-red-300" : "text-stone-300");
+  }
+
+  async function loadMonitor() {
+    const monitor = await (await fetch(`/api/monitors/${monitorId}`)).json();
+    const status = monitor.status || {};
+    const conn = monitor.latest_connection_count || {};
+    const ops = monitor.latest_current_ops || {};
+    document.getElementById("monitor-name").textContent = monitor.name || "Monitor";
+    document.getElementById("monitor-uri").textContent = monitor.display_uri || "";
+    const stateEl = document.getElementById("status-state");
+    stateEl.textContent = status.state || "pending";
+    setStatusClass(stateEl, status.state);
+    document.getElementById("connection-current").textContent = conn.current ?? "--";
+    document.getElementById("connection-available").textContent = `Available ${conn.available ?? "--"}`;
+    document.getElementById("ops-active").textContent = ops.active_count ?? "--";
+    document.getElementById("ops-total").textContent = `Total ${ops.total_count ?? "--"}`;
+    document.getElementById("status-latency").textContent = status.latency_ms ? `${status.latency_ms} ms` : "--";
+    const error = document.getElementById("status-error");
+    error.textContent = status.last_error || "";
+    error.classList.toggle("hidden", !status.last_error);
+  }
+
+  function buildLineChart(canvasId, rows, datasets, extraOptions = {}) {
+    const dataSets = datasets.map((dataset) => ({
+      label: dataset.label,
+      data: rows.map((row) => row[dataset.key] ?? null),
+      borderColor: dataset.color,
+      backgroundColor: dataset.color,
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      tension: 0.25,
+    }));
+    const config = {
+      type: "line",
+      data: { labels: rows.map(labelFor), datasets: dataSets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: "index" },
+        plugins: {
+          legend: { labels: { boxWidth: 10, boxHeight: 10 } },
+          tooltip: { backgroundColor: "#1c1917", borderColor: "#44403c", borderWidth: 1, callbacks: extraOptions.tooltipCallbacks || {} },
+        },
+        scales: {
+          x: { ticks: { color: "#78716c", maxTicksLimit: 6 }, grid: { color: "rgba(120, 113, 108, 0.22)" } },
+          y: { beginAtZero: true, ticks: { color: "#78716c" }, grid: { color: "rgba(120, 113, 108, 0.22)" } },
+        },
+      },
+    };
+    if (charts[canvasId]) {
+      charts[canvasId].data = config.data;
+      charts[canvasId].update();
+    } else {
+      charts[canvasId] = new Chart(document.getElementById(canvasId), config);
+    }
+  }
+
+  async function loadCharts(windowKey = "last_1000") {
+    const payload = await (await fetch(`/api/monitors/${monitorId}/charts?window=${encodeURIComponent(windowKey)}`)).json();
+    document.getElementById("chart-window-label").textContent = `${payload.window} · ${payload.bucket}`;
+    buildLineChart("connections-chart", payload.connections, [{ label: "Current", key: "current", color: "#34d399" }], {
+      tooltipCallbacks: {
+        afterBody(items) {
+          const row = payload.connections[items[0].dataIndex] || {};
+          return [`Available: ${row.available ?? "--"}`, `Total created: ${row.total_created ?? "--"}`, `Rejected: ${row.rejected ?? "--"}`, `Active: ${row.active ?? "--"}`, `Samples: ${row.samples ?? 1}`];
+        },
+      },
+    });
+    buildLineChart("current-ops-chart", payload.current_ops, [
+      { label: "Active", key: "active_count", color: "#fbbf24" },
+      { label: "Total", key: "total_count", color: "#a78bfa" },
+    ]);
+    buildLineChart("server-checks-chart", payload.server_checks, [{ label: "Latency ms", key: "latency_ms", color: "#fb7185" }]);
+  }
+
+  document.getElementById("metric-window").addEventListener("change", (event) => loadCharts(event.target.value));
+  document.getElementById("check-now").addEventListener("click", async () => {
+    await fetch(`/api/monitors/${monitorId}/check`, { method: "POST" });
+    const msg = document.getElementById("check-message");
+    msg.textContent = "Full check enqueued. Refreshing shortly.";
+    msg.classList.remove("hidden");
+    setTimeout(() => { loadMonitor(); loadCharts(document.getElementById("metric-window").value); }, 1600);
+  });
+  document.getElementById("delete-target").addEventListener("click", async () => {
+    const name = document.getElementById("monitor-name").textContent || "this target";
+    if (!window.confirm(`Delete ${name}? This permanently deletes the target and all old monitoring data.`)) return;
+
+    const button = document.getElementById("delete-target");
+    button.disabled = true;
+    button.textContent = "Deleting...";
+
+    const response = await fetch(`/api/monitors/${monitorId}`, { method: "DELETE" });
+    if (response.ok) {
+      window.location.href = "/";
+      return;
+    }
+
+    const msg = document.getElementById("check-message");
+    msg.textContent = "Delete failed. The target may have already been removed.";
+    msg.className = "mb-4 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200";
+    button.disabled = false;
+    button.textContent = "Delete target";
+  });
+
+  loadMonitor();
+  loadCharts();
+</script>
+{% endblock %}

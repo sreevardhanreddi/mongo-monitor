@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block head %}
+<script src="https://unpkg.com/gridjs@6/dist/gridjs.umd.js"></script>
+{% endblock %}
+{% block content %}
+<div class="mb-5">
+  <a href="/monitors/{{ monitor_id }}" class="text-sm text-stone-400 hover:text-stone-200">Back to monitor</a>
+  <h1 class="mt-2 text-2xl font-semibold text-stone-50">Database Stats</h1>
+  <p id="monitor-name" class="mt-1 text-sm text-stone-500"></p>
+</div>
+<div id="summary" class="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"></div>
+<section class="rounded-lg border border-stone-800 bg-stone-900 overflow-hidden">
+  <div id="db-grid"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const monitorId = "{{ monitor_id }}";
+
+  const grid = new gridjs.Grid({
+    columns: [
+      {
+        name: 'Database',
+        sort: true,
+        formatter: (cell) => gridjs.html(`<a class="font-medium text-emerald-300 hover:text-emerald-200" href="/monitors/${monitorId}/storage?database_name=${encodeURIComponent(cell)}">${App.esc(cell)}</a>`),
+      },
+      { name: 'Collections', sort: true, formatter: (cell) => App.formatNumber(cell) },
+      { name: 'Objects', sort: true, formatter: (cell) => App.formatNumber(cell) },
+      { name: 'Total', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Data', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Storage', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Indexes', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Checked', sort: true, formatter: (cell) => App.formatDateTime(cell) },
+    ],
+    data: [],
+    search: { debounceTimeout: 250 },
+    sort: true,
+    language: {
+      search: { placeholder: 'Search databases' },
+      noRecordsFound: 'No database stats yet. Run Check now to collect storage stats.',
+      loading: 'Loading…',
+    },
+  }).render(document.getElementById('db-grid'));
+
+  function card(label, value) {
+    return `<section class="rounded-lg border border-stone-800 bg-stone-900 p-4"><div class="text-xs text-stone-500">${label}</div><div class="mt-2 text-2xl font-semibold text-stone-50">${value}</div></section>`;
+  }
+
+  async function load() {
+    const [monitor, databases] = await Promise.all([
+      fetch(`/api/monitors/${monitorId}`).then(r => r.json()),
+      fetch(`/api/monitors/${monitorId}/database-stats`).then(r => r.json()),
+    ]);
+    document.getElementById('monitor-name').textContent = monitor.name || '';
+
+    const summary = databases.reduce((acc, db) => {
+      acc.database_count += 1;
+      acc.collections += db.collections || 0;
+      acc.objects += db.objects || 0;
+      acc.data_size_bytes += db.data_size_bytes || 0;
+      acc.storage_size_bytes += db.storage_size_bytes || 0;
+      acc.index_size_bytes += db.index_size_bytes || 0;
+      acc.total_size_bytes += db.total_size_bytes || 0;
+      return acc;
+    }, { database_count: 0, collections: 0, objects: 0, data_size_bytes: 0, storage_size_bytes: 0, index_size_bytes: 0, total_size_bytes: 0 });
+
+    document.getElementById('summary').innerHTML = [
+      card('Databases', App.formatNumber(summary.database_count)),
+      card('Collections', App.formatNumber(summary.collections)),
+      card('Objects', App.formatNumber(summary.objects)),
+      card('Total Size', App.humanBytes(summary.total_size_bytes)),
+      card('Data Size', App.humanBytes(summary.data_size_bytes)),
+      card('Storage Size', App.humanBytes(summary.storage_size_bytes)),
+      card('Index Size', App.humanBytes(summary.index_size_bytes)),
+    ].join('');
+
+    const sorted = [...databases].sort((a, b) => (b.total_size_bytes || 0) - (a.total_size_bytes || 0));
+    grid.updateConfig({
+      data: sorted.map(db => [
+        db.database_name,
+        db.collections || 0,
+        db.objects || 0,
+        db.total_size_bytes || 0,
+        db.data_size_bytes || 0,
+        db.storage_size_bytes || 0,
+        db.index_size_bytes || 0,
+        db.checked_at,
+      ]),
+    }).forceRender();
+  }
+
+  load();
+</script>
+{% endblock %}

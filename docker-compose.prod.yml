@@ -1,0 +1,82 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: mongodb-monitoring-api
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      metadata-mongodb:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: mongodb-monitoring-worker
+    command: celery -A core.celery_app.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      metadata-mongodb:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: mongodb-monitoring-beat
+    command: celery -A core.celery_app.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      metadata-mongodb:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: mongodb-monitoring-redis
+    volumes:
+      - ./db_data/redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  metadata-mongodb:
+    image: mongo:7
+    container_name: mongodb-monitoring-metadata
+    volumes:
+      - ./db_data/metadata_mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    restart: unless-stopped
+

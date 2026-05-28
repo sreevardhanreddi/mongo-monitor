@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block head %}
+<script src="https://unpkg.com/gridjs@6/dist/gridjs.umd.js"></script>
+{% endblock %}
+{% block content %}
+<div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+  <div>
+    <a href="/monitors/{{ monitor_id }}" class="text-sm text-stone-400 hover:text-stone-200">Back to monitor</a>
+    <h1 class="mt-2 text-2xl font-semibold text-stone-50">Current Ops</h1>
+    <p id="ops-summary" class="mt-1 text-sm text-stone-500">Loading...</p>
+  </div>
+  <button id="refresh-ops"
+    class="rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-stone-950 hover:bg-emerald-400">Refresh</button>
+</div>
+
+<section class="rounded-lg border border-stone-800 bg-stone-900 overflow-hidden">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-800 p-4">
+    <div class="text-sm text-stone-400">
+      <span id="ops-visible-count">0</span><span> visible of </span><span id="ops-total-count">0</span><span> sampled
+        ops</span>
+    </div>
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <input id="ops-search"
+        class="w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none focus:border-emerald-500 sm:w-80"
+        placeholder="Search ops">
+    </div>
+  </div>
+  <div id="ops-grid"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const monitorId = "{{ monitor_id }}";
+  const searchInput = document.getElementById('ops-search');
+  const visibleCount = document.getElementById('ops-visible-count');
+  const totalCount = document.getElementById('ops-total-count');
+  let allOps = [];
+  let searchTimer = null;
+
+  const grid = new gridjs.Grid({
+    columns: [
+      { name: 'Client', sort: true },
+      { name: 'App', sort: true },
+      { name: 'Driver', sort: true },
+      { name: 'User', sort: true },
+      { name: 'Namespace', sort: true },
+      { name: 'Operation', sort: true },
+      { name: 'Command', sort: true },
+      { name: 'Running', sort: true, formatter: (cell) => cell != null ? `${Number(cell).toFixed(2)}s` : '--' },
+      { name: 'Active', sort: true, formatter: (cell) => String(cell ?? '--') },
+      { name: 'Lock', sort: true, formatter: (cell) => String(cell ?? '--') },
+      { name: 'Description', sort: true },
+    ],
+    data: [],
+    sort: true,
+    language: {
+      noRecordsFound: 'No current operation sample yet. Click Refresh to collect one.',
+      loading: 'Loading…',
+    },
+  }).render(document.getElementById('ops-grid'));
+
+  function toRow(op) {
+    return [
+      op.client || '--',
+      op.app_name || '--',
+      op.driver || '--',
+      op.user || '--',
+      op.namespace || '--',
+      op.operation || '--',
+      op.command || '--',
+      op.secs_running ?? null,
+      op.active,
+      op.waiting_for_lock,
+      op.desc || '--',
+    ];
+  }
+
+  function applyFilter() {
+    const query = searchInput.value.trim().toLowerCase();
+    const filtered = allOps.filter((op) => {
+      const searchText = [
+        op.client,
+        op.app_name,
+        op.driver,
+        op.user,
+        op.namespace,
+        op.operation,
+        op.command,
+        op.desc,
+      ].join(' ').toLowerCase();
+      return !query || searchText.includes(query);
+    });
+    visibleCount.textContent = filtered.length;
+    grid.updateConfig({ data: filtered.map(toRow) }).forceRender();
+  }
+
+  async function loadOps() {
+    const [monitor, ops] = await Promise.all([
+      fetch(`/api/monitors/${monitorId}`).then(r => r.json()),
+      fetch(`/api/monitors/${monitorId}/current-ops`).then(r => r.json()),
+    ]);
+    document.getElementById('ops-summary').textContent = `${monitor.name} · ${ops.active_count} active · ${ops.total_count} total · ${App.formatDateTime(ops.checked_at, { empty: 'not collected' })}`;
+    allOps = ops.rows || [];
+    totalCount.textContent = allOps.length;
+    applyFilter();
+  }
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(applyFilter, 250);
+  });
+  document.getElementById('refresh-ops').addEventListener('click', async () => {
+    await fetch(`/api/monitors/${monitorId}/check`, { method: 'POST' });
+    setTimeout(loadOps, 1500);
+  });
+
+  loadOps();
+</script>
+{% endblock %}

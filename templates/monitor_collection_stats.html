@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block head %}
+<script src="https://unpkg.com/gridjs@6/dist/gridjs.umd.js"></script>
+{% endblock %}
+{% block content %}
+<div class="mb-5">
+  <a href="/monitors/{{ monitor_id }}/storage" class="text-sm text-stone-400 hover:text-stone-200">Back to databases</a>
+  <h1 class="mt-2 text-2xl font-semibold text-stone-50">Collection Stats</h1>
+  <p class="mt-1 break-all text-sm text-stone-500">{{ database_name }}</p>
+</div>
+<div id="summary" class="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+<section class="rounded-lg border border-stone-800 bg-stone-900 overflow-hidden">
+  <div id="col-grid"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const monitorId = "{{ monitor_id }}";
+  const databaseName = {{ database_name | tojson }};
+
+  const grid = new gridjs.Grid({
+    columns: [
+      { name: 'Collection', sort: true },
+      { name: 'Documents', sort: true, formatter: (cell) => App.formatNumber(cell) },
+      { name: 'Data', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Storage', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Indexes', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Avg Object', sort: true, formatter: (cell) => App.humanBytes(cell) },
+      { name: 'Index Count', sort: true, formatter: (cell) => App.formatNumber(cell) },
+      { name: 'Checked', sort: true, formatter: (cell) => App.formatDateTime(cell) },
+    ],
+    data: [],
+    search: { debounceTimeout: 250 },
+    sort: true,
+    language: {
+      search: { placeholder: 'Search collections' },
+      noRecordsFound: 'No collection stats for this database yet.',
+      loading: 'Loading…',
+    },
+  }).render(document.getElementById('col-grid'));
+
+  function card(label, value) {
+    return `<section class="rounded-lg border border-stone-800 bg-stone-900 p-4"><div class="text-xs text-stone-500">${label}</div><div class="mt-2 text-2xl font-semibold text-stone-50">${value}</div></section>`;
+  }
+
+  async function load() {
+    const collections = await fetch(`/api/monitors/${monitorId}/collection-stats?database_name=${encodeURIComponent(databaseName)}`).then(r => r.json());
+
+    const summary = collections.reduce((acc, col) => {
+      acc.collection_count += 1;
+      acc.documents += col.count || 0;
+      acc.size_bytes += col.size_bytes || 0;
+      acc.storage_size_bytes += col.storage_size_bytes || 0;
+      acc.total_index_size_bytes += col.total_index_size_bytes || 0;
+      acc.index_count += col.nindexes || 0;
+      return acc;
+    }, { collection_count: 0, documents: 0, size_bytes: 0, storage_size_bytes: 0, total_index_size_bytes: 0, index_count: 0 });
+
+    document.getElementById('summary').innerHTML = [
+      card('Collections', App.formatNumber(summary.collection_count)),
+      card('Documents', App.formatNumber(summary.documents)),
+      card('Indexes', App.formatNumber(summary.index_count)),
+      card('Data Size', App.humanBytes(summary.size_bytes)),
+      card('Storage Size', App.humanBytes(summary.storage_size_bytes)),
+      card('Index Size', App.humanBytes(summary.total_index_size_bytes)),
+    ].join('');
+
+    const sorted = [...collections].sort((a, b) => (b.storage_size_bytes || 0) - (a.storage_size_bytes || 0));
+    grid.updateConfig({
+      data: sorted.map(col => [
+        col.collection_name,
+        col.count || 0,
+        col.size_bytes || 0,
+        col.storage_size_bytes || 0,
+        col.total_index_size_bytes || 0,
+        col.avg_obj_size_bytes || 0,
+        col.nindexes || 0,
+        col.checked_at,
+      ]),
+    }).forceRender();
+  }
+
+  load();
+</script>
+{% endblock %}
