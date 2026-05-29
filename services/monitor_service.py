@@ -12,6 +12,7 @@ from models.monitor import MonitorCreate, MonitorUpdate, serialize_doc
 MONITOR_DATA_COLLECTIONS = (
     "connection_counts",
     "current_ops",
+    "current_op_samples",
     "server_statuses",
     "database_stats",
     "collection_stats",
@@ -78,7 +79,7 @@ def list_monitors() -> list[dict[str, Any]]:
             "checked_at": current_ops.get("checked_at"),
             "active_count": current_ops.get("active_count", 0),
             "total_count": current_ops.get("total_count", 0),
-            "sample_count": len(current_ops.get("sample", [])),
+            "sample_count": current_ops.get("total_count", 0),
         }
         monitors.append(monitor)
     return monitors
@@ -341,12 +342,18 @@ def _nested(doc: dict[str, Any], *keys: str) -> Any:
 
 
 def latest_current_ops_rows(monitor_id: str) -> dict[str, Any]:
-    doc = latest_metric("current_ops", monitor_id)
+    db = get_metadata_db()
+    doc = db.current_ops.find_one(
+        {"monitor_id": ObjectId(monitor_id)}, sort=[("checked_at", DESCENDING)]
+    )
     if not doc:
         return {"checked_at": None, "active_count": 0, "total_count": 0, "rows": []}
 
+    samples = list(db.current_op_samples.find({"current_ops_id": doc["_id"]}))
+
     rows = []
-    for op in doc.get("sample", []):
+    for sample in samples:
+        op = sample.get("op") or {}
         command = op.get("command") if isinstance(op.get("command"), dict) else {}
         users = op.get("effectiveUsers") or []
         user_names = [
@@ -381,8 +388,9 @@ def latest_current_ops_rows(monitor_id: str) -> dict[str, Any]:
             }
         )
 
+    checked_at = doc.get("checked_at")
     return {
-        "checked_at": doc.get("checked_at"),
+        "checked_at": checked_at.isoformat() if checked_at else None,
         "active_count": doc.get("active_count", 0),
         "total_count": doc.get("total_count", 0),
         "rows": rows,

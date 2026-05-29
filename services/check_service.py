@@ -132,21 +132,41 @@ def collect_current_ops(monitor: dict[str, Any]) -> dict[str, Any]:
     current_op = client.admin.command("currentOp")
     inprog = current_op.get("inprog", [])
     active_ops = [op for op in inprog if op.get("active")]
+    checked_at = _now()
     doc = {
         "monitor_id": monitor["_id"],
         "active_count": len(active_ops),
         "total_count": len(inprog),
-        "sample": inprog,
-        "checked_at": _now(),
+        "checked_at": checked_at,
     }
-    get_metadata_db().current_ops.insert_one(doc)
+    db = get_metadata_db()
+    result = db.current_ops.insert_one(doc)
+    inserted_samples = 0
+    if inprog:
+        sample_docs = [
+            {
+                "current_ops_id": result.inserted_id,
+                "monitor_id": monitor["_id"],
+                "checked_at": checked_at,
+                "op": op,
+            }
+            for op in inprog
+        ]
+        try:
+            inserted_samples = len(
+                db.current_op_samples.insert_many(sample_docs, ordered=False).inserted_ids
+            )
+        except Exception:
+            # ordered=False already inserts what it can; BulkWriteError still
+            # carries partial results, but any other exception means nothing was saved.
+            pass
     client.close()
     return {
-        "monitor_id": str(doc["monitor_id"]),
-        "active_count": doc["active_count"],
-        "total_count": doc["total_count"],
-        "sample_count": len(doc["sample"]),
-        "checked_at": doc["checked_at"].isoformat(),
+        "monitor_id": str(monitor["_id"]),
+        "active_count": len(active_ops),
+        "total_count": len(inprog),
+        "sample_count": inserted_samples,
+        "checked_at": checked_at.isoformat(),
     }
 
 
