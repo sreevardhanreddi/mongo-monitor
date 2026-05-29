@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block head %}
 <script src="https://unpkg.com/gridjs@6/dist/gridjs.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 {% endblock %}
 {% block content %}
 <div class="mb-5">
@@ -9,6 +10,19 @@
   <p class="mt-1 break-all text-sm text-stone-500">{{ database_name }}</p>
 </div>
 <div id="summary" class="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+
+<section class="mb-5 rounded-lg border border-stone-800 bg-stone-900 p-4">
+  <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+    <span class="text-sm font-medium text-stone-300">Storage Breakdown</span>
+    <div class="flex gap-1 rounded-md border border-stone-700 p-0.5 text-xs">
+      <button data-metric="storage_size_bytes" class="metric-btn rounded px-2.5 py-1">Storage</button>
+      <button data-metric="size_bytes" class="metric-btn rounded px-2.5 py-1">Data</button>
+      <button data-metric="total_index_size_bytes" class="metric-btn rounded px-2.5 py-1">Indexes</button>
+    </div>
+  </div>
+  <div id="barchart"></div>
+</section>
+
 <section class="rounded-lg border border-stone-800 bg-stone-900 overflow-hidden">
   <div id="col-grid"></div>
 </section>
@@ -18,6 +32,131 @@
 <script>
   const monitorId = "{{ monitor_id }}";
   const databaseName = {{ database_name | tojson }};
+  let collections = [];
+  let activeMetric = 'storage_size_bytes';
+
+  // ── Bar chart ─────────────────────────────────────────────────────────────
+
+  const CHART_HEIGHT = 420;
+  const VISIBLE_BARS = 15;
+  let chart = null;
+
+  function renderBarChart() {
+    const data = collections
+      .filter(col => col.ok !== false)
+      .map(col => ({ name: col.collection_name, value: col[activeMetric] || 0, _col: col }))
+      .filter(d => d.value > 0)
+      .sort((a, b) => a.value - b.value); // ascending so largest is at top
+
+    const container = document.getElementById('barchart');
+    container.style.height = `${CHART_HEIGHT}px`;
+
+    if (!chart) {
+      chart = echarts.init(container, null, { renderer: 'canvas' });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // show last VISIBLE_BARS items (the largest, since sorted ascending)
+    const startPct = data.length > VISIBLE_BARS
+      ? Math.round((1 - VISIBLE_BARS / data.length) * 100)
+      : 0;
+
+    chart.setOption({
+      backgroundColor: 'transparent',
+      grid: { left: 160, right: 80, top: 8, bottom: 30, containLabel: false },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'none' },
+        formatter(params) {
+          const col = params[0].data._col;
+          return [
+            `<b>${App.esc(col.collection_name)}</b>`,
+            `Data: ${App.humanBytes(col.size_bytes)}`,
+            `Storage: ${App.humanBytes(col.storage_size_bytes)}`,
+            `Indexes: ${App.humanBytes(col.total_index_size_bytes)}`,
+            `Documents: ${App.formatNumber(col.count)}`,
+            `Avg object: ${App.humanBytes(col.avg_obj_size_bytes)}`,
+            `Index count: ${App.formatNumber(col.nindexes)}`,
+          ].join('<br>');
+        },
+      },
+      dataZoom: [
+        {
+          type: 'inside',
+          orient: 'vertical',
+          start: startPct,
+          end: 100,
+          zoomOnMouseWheel: false,
+          moveOnMouseWheel: true,
+          moveOnMouseMove: false,
+        },
+        {
+          type: 'slider',
+          orient: 'vertical',
+          right: 8,
+          width: 16,
+          start: startPct,
+          end: 100,
+          brushSelect: false,
+          handleStyle: { color: '#44403c' },
+          fillerColor: 'rgba(5,150,105,0.15)',
+          borderColor: '#292524',
+          textStyle: { color: 'transparent' },
+        },
+      ],
+      xAxis: {
+        type: 'value',
+        axisLabel: { color: '#78716c', formatter: v => App.humanBytes(v) },
+        splitLine: { lineStyle: { color: '#292524' } },
+        axisLine: { show: false },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'category',
+        data: data.map(d => d.name),
+        axisLabel: {
+          color: '#d6d3d1',
+          width: 150,
+          overflow: 'truncate',
+        },
+        axisLine: { show: false },
+        axisTick: { show: false },
+      },
+      series: [{
+        type: 'bar',
+        data: data.map(d => ({ value: d.value, _col: d._col })),
+        itemStyle: { color: '#059669', borderRadius: [0, 3, 3, 0] },
+        emphasis: { itemStyle: { color: '#10b981' } },
+        label: {
+          show: true,
+          position: 'right',
+          color: '#a8a29e',
+          fontSize: 11,
+          formatter: params => App.humanBytes(params.value),
+        },
+        barMaxWidth: 20,
+      }],
+    }, true);
+  }
+
+  // ── Metric toggle buttons ─────────────────────────────────────────────────
+
+  function setActiveMetric(metric) {
+    activeMetric = metric;
+    document.querySelectorAll('.metric-btn').forEach(btn => {
+      const active = btn.dataset.metric === metric;
+      btn.className = `metric-btn rounded px-2.5 py-1 transition-colors ${active ? 'bg-emerald-600 text-white' : 'text-stone-400 hover:text-stone-200'}`;
+    });
+    renderBarChart();
+  }
+
+  document.querySelectorAll('.metric-btn').forEach(btn => {
+    btn.addEventListener('click', () => setActiveMetric(btn.dataset.metric));
+  });
+
+  setActiveMetric('storage_size_bytes');
+
+  // ── Grid ──────────────────────────────────────────────────────────────────
 
   const grid = new gridjs.Grid({
     columns: [
@@ -45,7 +184,7 @@
   }
 
   async function load() {
-    const collections = await fetch(`/api/monitors/${monitorId}/collection-stats?database_name=${encodeURIComponent(databaseName)}`).then(r => r.json());
+    collections = await fetch(`/api/monitors/${monitorId}/collection-stats?database_name=${encodeURIComponent(databaseName)}`).then(r => r.json());
 
     const summary = collections.reduce((acc, col) => {
       acc.collection_count += 1;
@@ -65,6 +204,8 @@
       card('Storage Size', App.humanBytes(summary.storage_size_bytes)),
       card('Index Size', App.humanBytes(summary.total_index_size_bytes)),
     ].join('');
+
+    renderBarChart();
 
     const sorted = [...collections].sort((a, b) => (b.storage_size_bytes || 0) - (a.storage_size_bytes || 0));
     grid.updateConfig({

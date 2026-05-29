@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block head %}
 <script src="https://unpkg.com/gridjs@6/dist/gridjs.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 {% endblock %}
 {% block content %}
 <div class="mb-5">
@@ -9,6 +10,20 @@
   <p id="monitor-name" class="mt-1 text-sm text-stone-500"></p>
 </div>
 <div id="summary" class="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"></div>
+
+<section class="mb-5 rounded-lg border border-stone-800 bg-stone-900 p-4">
+  <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+    <span class="text-sm font-medium text-stone-300">Storage Breakdown</span>
+    <div class="flex gap-1 rounded-md border border-stone-700 p-0.5 text-xs">
+      <button data-metric="total_size_bytes" class="metric-btn rounded px-2.5 py-1">Total</button>
+      <button data-metric="data_size_bytes" class="metric-btn rounded px-2.5 py-1">Data</button>
+      <button data-metric="storage_size_bytes" class="metric-btn rounded px-2.5 py-1">Storage</button>
+      <button data-metric="index_size_bytes" class="metric-btn rounded px-2.5 py-1">Indexes</button>
+    </div>
+  </div>
+  <div id="treemap" style="height:340px;"></div>
+</section>
+
 <section class="rounded-lg border border-stone-800 bg-stone-900 overflow-hidden">
   <div id="db-grid"></div>
 </section>
@@ -17,6 +32,103 @@
 {% block scripts %}
 <script>
   const monitorId = "{{ monitor_id }}";
+  let databases = [];
+  let activeMetric = 'total_size_bytes';
+
+  const metricLabels = {
+    total_size_bytes: 'Total Size',
+    data_size_bytes: 'Data Size',
+    storage_size_bytes: 'Storage Size',
+    index_size_bytes: 'Index Size',
+  };
+
+  // ── Treemap ───────────────────────────────────────────────────────────────
+
+  const chart = echarts.init(document.getElementById('treemap'), null, { renderer: 'canvas' });
+
+  const PALETTE = [
+    '#059669', '#0d9488', '#0284c7', '#7c3aed',
+    '#db2777', '#ea580c', '#ca8a04', '#16a34a',
+  ];
+
+  function renderTreemap() {
+    const data = databases
+      .map((db, i) => ({
+        name: db.database_name,
+        value: db[activeMetric] || 0,
+        _db: db,
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+      }))
+      .filter(d => d.value > 0)
+      .sort((a, b) => b.value - a.value);
+
+    chart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: {
+        formatter(params) {
+          const db = params.data._db;
+          return [
+            `<b>${App.esc(db.database_name)}</b>`,
+            `Total: ${App.humanBytes(db.total_size_bytes)}`,
+            `Data: ${App.humanBytes(db.data_size_bytes)}`,
+            `Storage: ${App.humanBytes(db.storage_size_bytes)}`,
+            `Indexes: ${App.humanBytes(db.index_size_bytes)}`,
+            `Collections: ${App.formatNumber(db.collections)}`,
+            `Objects: ${App.formatNumber(db.objects)}`,
+          ].join('<br>');
+        },
+      },
+      series: [{
+        type: 'treemap',
+        width: '100%',
+        height: '100%',
+        roam: false,
+        nodeClick: false,
+        breadcrumb: { show: false },
+        label: {
+          show: true,
+          formatter(params) {
+            return `{name|${params.name}}\n{size|${App.humanBytes(params.value)}}`;
+          },
+          rich: {
+            name: { fontSize: 13, fontWeight: 'bold', color: '#fff', lineHeight: 20 },
+            size: { fontSize: 11, color: 'rgba(255,255,255,0.75)', lineHeight: 18 },
+          },
+        },
+        upperLabel: { show: false },
+        itemStyle: { borderWidth: 2, borderColor: '#1c1917', gapWidth: 2 },
+        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } },
+        data,
+      }],
+    }, true);
+  }
+
+  chart.on('click', params => {
+    if (params.data?._db) {
+      window.location.href = `/monitors/${monitorId}/storage?database_name=${encodeURIComponent(params.data._db.database_name)}`;
+    }
+  });
+
+  window.addEventListener('resize', () => chart.resize());
+
+  // ── Metric toggle buttons ─────────────────────────────────────────────────
+
+  function setActiveMetric(metric) {
+    activeMetric = metric;
+    document.querySelectorAll('.metric-btn').forEach(btn => {
+      const active = btn.dataset.metric === metric;
+      btn.className = `metric-btn rounded px-2.5 py-1 transition-colors ${active ? 'bg-emerald-600 text-white' : 'text-stone-400 hover:text-stone-200'}`;
+    });
+    renderTreemap();
+  }
+
+  document.querySelectorAll('.metric-btn').forEach(btn => {
+    btn.addEventListener('click', () => setActiveMetric(btn.dataset.metric));
+  });
+
+  setActiveMetric('total_size_bytes');
+
+  // ── Grid ──────────────────────────────────────────────────────────────────
 
   const grid = new gridjs.Grid({
     columns: [
@@ -48,11 +160,13 @@
   }
 
   async function load() {
-    const [monitor, databases] = await Promise.all([
+    const [monitor, dbs] = await Promise.all([
       fetch(`/api/monitors/${monitorId}`).then(r => r.json()),
       fetch(`/api/monitors/${monitorId}/database-stats`).then(r => r.json()),
     ]);
     document.getElementById('monitor-name').textContent = monitor.name || '';
+
+    databases = dbs;
 
     const summary = databases.reduce((acc, db) => {
       acc.database_count += 1;
@@ -74,6 +188,8 @@
       card('Storage Size', App.humanBytes(summary.storage_size_bytes)),
       card('Index Size', App.humanBytes(summary.index_size_bytes)),
     ].join('');
+
+    renderTreemap();
 
     const sorted = [...databases].sort((a, b) => (b.total_size_bytes || 0) - (a.total_size_bytes || 0));
     grid.updateConfig({
