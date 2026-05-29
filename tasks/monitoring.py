@@ -70,7 +70,6 @@ def collect_monitor_snapshot(monitor_id: str) -> None:
     collect_server_status_task.delay(monitor_id)
     collect_connection_count_task.delay(monitor_id)
     collect_current_ops_task.delay(monitor_id)
-    collect_storage_stats_task.delay(monitor_id)
 
 
 @celery_app.task(name="tasks.monitoring.delete_monitor_data")
