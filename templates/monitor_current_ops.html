@@ -25,6 +25,9 @@
         placeholder="Search ops">
     </div>
   </div>
+  <div id="client-ip-counts" class="flex flex-wrap gap-2 border-b border-stone-800 p-4 text-sm text-stone-300">
+    <span class="text-stone-500">No client IPs</span>
+  </div>
   <div id="ops-grid"></div>
 </section>
 {% endblock %}
@@ -35,6 +38,7 @@
   const searchInput = document.getElementById('ops-search');
   const visibleCount = document.getElementById('ops-visible-count');
   const totalCount = document.getElementById('ops-total-count');
+  const clientIpCounts = document.getElementById('client-ip-counts');
   let allOps = [];
   let searchTimer = null;
 
@@ -86,6 +90,38 @@
     ];
   }
 
+  function clientIpFor(op) {
+    const client = String(op.client || '').trim();
+    if (!client) return '--';
+    if (client.startsWith('[')) {
+      const closingBracket = client.indexOf(']');
+      return closingBracket > 0 ? client.slice(1, closingBracket) : client;
+    }
+    const host = client.split(':')[0];
+    return host || client;
+  }
+
+  function renderClientIpCounts(ops) {
+    const counts = ops.reduce((grouped, op) => {
+      const clientIp = clientIpFor(op);
+      grouped.set(clientIp, (grouped.get(clientIp) || 0) + 1);
+      return grouped;
+    }, new Map());
+    const sortedCounts = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+    if (!sortedCounts.length) {
+      clientIpCounts.innerHTML = '<span class="text-stone-500">No client IPs</span>';
+      return;
+    }
+
+    clientIpCounts.innerHTML = sortedCounts.map(([clientIp, count]) => `
+      <span class="inline-flex items-center gap-2 rounded-md border border-stone-700 bg-stone-950 px-2.5 py-1">
+        <span class="font-medium text-stone-100">${App.esc(clientIp)}</span>
+        <span class="text-stone-500">${App.formatNumber(count)}</span>
+      </span>
+    `).join('');
+  }
+
   function applyFilter() {
     const query = searchInput.value.trim().toLowerCase();
     const filtered = allOps.filter((op) => {
@@ -107,6 +143,7 @@
       return !query || searchText.includes(query);
     });
     visibleCount.textContent = filtered.length;
+    renderClientIpCounts(filtered);
     grid.updateConfig({ data: filtered.map(toRow) }).forceRender();
   }
 
