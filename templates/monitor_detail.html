@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+{% endblock %}
 {% block content %}
 <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
   <div>
@@ -70,27 +73,24 @@
   <div class="space-y-6 p-4">
     <div class="rounded-md border border-stone-800 bg-stone-950/40 p-4">
       <h2 class="text-base font-semibold text-stone-50">Connection History</h2>
-      <div class="mt-3 h-72"><canvas id="connections-chart"></canvas></div>
+      <div id="connections-chart" class="mt-3 h-72"></div>
     </div>
     <div class="rounded-md border border-stone-800 bg-stone-950/40 p-4">
       <h2 class="text-base font-semibold text-stone-50">Current Ops</h2>
-      <div class="mt-3 h-72"><canvas id="current-ops-chart"></canvas></div>
+      <div id="current-ops-chart" class="mt-3 h-72"></div>
     </div>
     <div class="rounded-md border border-stone-800 bg-stone-950/40 p-4">
       <h2 class="text-base font-semibold text-stone-50">Server Checks</h2>
-      <div class="mt-3 h-72"><canvas id="server-checks-chart"></canvas></div>
+      <div id="server-checks-chart" class="mt-3 h-72"></div>
     </div>
   </div>
 </section>
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
 <script>
   const monitorId = "{{ monitor_id }}";
-  const charts = {};
-  Chart.defaults.color = "#d6d3d1";
-  Chart.defaults.font.family = "Inter, ui-sans-serif, system-ui, sans-serif";
+  const chartInstances = {};
 
   function labelFor(row) {
     return App.formatDateTime(row.checked_at, { short: true });
@@ -99,6 +99,205 @@
   function setStatusClass(el, state) {
     el.className = "mt-2 text-2xl font-semibold " + (state === "up" ? "text-emerald-300" : state === "down" ? "text-red-300" : "text-stone-300");
   }
+
+  // ── ECharts helpers ───────────────────────────────────────────────────────
+
+  function getChart(id) {
+    if (!chartInstances[id]) {
+      chartInstances[id] = echarts.init(document.getElementById(id), null, { renderer: 'canvas' });
+      window.addEventListener('resize', () => chartInstances[id].resize());
+    }
+    return chartInstances[id];
+  }
+
+  const BASE_TOOLTIP = {
+    trigger: 'axis',
+    backgroundColor: '#1c1917',
+    borderColor: '#44403c',
+    borderWidth: 1,
+    textStyle: { color: '#d6d3d1', fontSize: 12 },
+    axisPointer: { type: 'cross', crossStyle: { color: '#44403c' }, label: { show: false } },
+  };
+
+  const BASE_X = {
+    type: 'category',
+    boundaryGap: false,
+    axisLabel: { color: '#78716c', hideOverlap: true, fontSize: 11 },
+    axisLine: { lineStyle: { color: '#292524' } },
+    axisTick: { show: false },
+    splitLine: { show: false },
+  };
+
+  const BASE_Y = {
+    type: 'value',
+    axisLabel: { color: '#78716c', fontSize: 11 },
+    splitLine: { lineStyle: { color: '#292524' } },
+    axisLine: { show: false },
+    axisTick: { show: false },
+  };
+
+  const BASE_LEGEND = {
+    top: 0,
+    right: 0,
+    textStyle: { color: '#a8a29e', fontSize: 11 },
+    inactiveColor: '#44403c',
+    icon: 'circle',
+    itemWidth: 8,
+    itemHeight: 8,
+  };
+
+  function line(name, data, color, opts = {}) {
+    return {
+      name,
+      type: 'line',
+      data,
+      lineStyle: { color, width: opts.width ?? 2, type: opts.dash ? 'dashed' : 'solid' },
+      itemStyle: { color },
+      areaStyle: opts.area ? { color: opts.area } : undefined,
+      symbol: 'none',
+      smooth: 0.25,
+      connectNulls: false,
+      ...opts.extra,
+    };
+  }
+
+  // ── Connection History ─────────────────────────────────────────────────────
+  // Current (emerald) + Active (amber) as solid lines
+  // Available (stone dashed) as a reference ceiling
+
+  function buildConnectionChart(rows) {
+    getChart('connections-chart').setOption({
+      backgroundColor: 'transparent',
+      grid: { left: 10, right: 20, top: 28, bottom: 10, containLabel: true },
+      legend: BASE_LEGEND,
+      tooltip: {
+        ...BASE_TOOLTIP,
+        formatter(params) {
+          const idx = params[0].dataIndex;
+          const row = rows[idx] || {};
+          const parts = [`<span style="color:#78716c">${params[0].axisValue}</span>`];
+          for (const p of params) {
+            parts.push(`${p.marker} ${p.seriesName}: <b>${p.value ?? '--'}</b>`);
+          }
+          parts.push(`<span style="color:#57534e">Total created: ${row.total_created ?? '--'}</span>`);
+          parts.push(`<span style="color:#57534e">Rejected: ${row.rejected ?? '--'}</span>`);
+          if (row.samples) parts.push(`<span style="color:#57534e">Samples: ${row.samples}</span>`);
+          return parts.join('<br>');
+        },
+      },
+      xAxis: { ...BASE_X, data: rows.map(labelFor) },
+      yAxis: { ...BASE_Y, minInterval: 1 },
+      series: [
+        line('Current', rows.map(r => r.current ?? null), '#34d399'),
+        line('Active', rows.map(r => r.active ?? null), '#fbbf24'),
+        line('Available', rows.map(r => r.available ?? null), '#57534e', { dash: true, width: 1.5 }),
+      ],
+    }, true);
+  }
+
+  // ── Current Ops ───────────────────────────────────────────────────────────
+  // Total (purple area, low opacity) beneath Active (amber area)
+  // The gap between the two areas represents idle/background ops
+
+  function buildCurrentOpsChart(rows) {
+    getChart('current-ops-chart').setOption({
+      backgroundColor: 'transparent',
+      grid: { left: 10, right: 20, top: 28, bottom: 10, containLabel: true },
+      legend: BASE_LEGEND,
+      tooltip: {
+        ...BASE_TOOLTIP,
+        formatter(params) {
+          const idx = params[0].dataIndex;
+          const row = rows[idx] || {};
+          const parts = [`<span style="color:#78716c">${params[0].axisValue}</span>`];
+          for (const p of params) {
+            parts.push(`${p.marker} ${p.seriesName}: <b>${p.value ?? '--'}</b>`);
+          }
+          const idle = (row.total_count ?? 0) - (row.active_count ?? 0);
+          if (idle > 0) parts.push(`<span style="color:#57534e">Idle: ${idle}</span>`);
+          if (row.samples) parts.push(`<span style="color:#57534e">Samples: ${row.samples}</span>`);
+          return parts.join('<br>');
+        },
+      },
+      xAxis: { ...BASE_X, data: rows.map(labelFor) },
+      yAxis: { ...BASE_Y, minInterval: 1 },
+      series: [
+        line('Total', rows.map(r => r.total_count ?? null), '#a78bfa', { area: 'rgba(167,139,250,0.12)' }),
+        line('Active', rows.map(r => r.active_count ?? null), '#fbbf24', { area: 'rgba(251,191,36,0.2)' }),
+      ],
+    }, true);
+  }
+
+  // ── Server Checks ─────────────────────────────────────────────────────────
+  // Latency (pink line) + red background bands for down periods
+
+  function downBands(rows, bucket) {
+    const labels = rows.map(labelFor);
+    const bands = [];
+    let start = null;
+    for (let i = 0; i < rows.length; i++) {
+      const down = bucket === 'sample' ? rows[i].ok === false : rows[i].ok_count === 0;
+      if (down && start === null) start = labels[i];
+      if (!down && start !== null) {
+        bands.push([{ xAxis: start }, { xAxis: labels[i - 1] }]);
+        start = null;
+      }
+    }
+    if (start !== null && labels.length) {
+      bands.push([{ xAxis: start }, { xAxis: labels[labels.length - 1] }]);
+    }
+    return bands;
+  }
+
+  function buildServerChecksChart(rows, bucket) {
+    const bands = downBands(rows, bucket);
+    getChart('server-checks-chart').setOption({
+      backgroundColor: 'transparent',
+      grid: { left: 10, right: 20, top: 28, bottom: 10, containLabel: true },
+      legend: BASE_LEGEND,
+      tooltip: {
+        ...BASE_TOOLTIP,
+        formatter(params) {
+          const idx = params[0].dataIndex;
+          const row = rows[idx] || {};
+          const parts = [`<span style="color:#78716c">${params[0].axisValue}</span>`];
+          for (const p of params) {
+            parts.push(`${p.marker} ${p.seriesName}: <b>${p.value != null ? p.value + ' ms' : '--'}</b>`);
+          }
+          if (bucket === 'sample') {
+            const okLabel = row.ok === false
+              ? `<span style="color:#f87171">Down</span>`
+              : `<span style="color:#34d399">Up</span>`;
+            parts.push(`Status: ${okLabel}`);
+          } else {
+            if (row.ok_count != null) parts.push(`<span style="color:#57534e">Up samples: ${row.ok_count} / ${row.samples ?? '--'}</span>`);
+          }
+          return parts.join('<br>');
+        },
+      },
+      xAxis: { ...BASE_X, data: rows.map(labelFor) },
+      yAxis: { ...BASE_Y, name: 'ms', nameTextStyle: { color: '#57534e', fontSize: 10 } },
+      series: [{
+        name: 'Latency',
+        type: 'line',
+        data: rows.map(r => r.latency_ms ?? null),
+        lineStyle: { color: '#fb7185', width: 2 },
+        itemStyle: { color: '#fb7185' },
+        areaStyle: { color: 'rgba(251,113,133,0.08)' },
+        symbol: 'none',
+        smooth: 0.25,
+        connectNulls: false,
+        markArea: bands.length ? {
+          silent: true,
+          itemStyle: { color: 'rgba(239,68,68,0.10)' },
+          label: { show: false },
+          data: bands,
+        } : undefined,
+      }],
+    }, true);
+  }
+
+  // ── Monitor info ──────────────────────────────────────────────────────────
 
   async function loadMonitor() {
     const monitor = await (await fetch(`/api/monitors/${monitorId}`)).json();
@@ -120,61 +319,18 @@
     error.classList.toggle("hidden", !status.last_error);
   }
 
-  function buildLineChart(canvasId, rows, datasets, extraOptions = {}) {
-    const dataSets = datasets.map((dataset) => ({
-      label: dataset.label,
-      data: rows.map((row) => row[dataset.key] ?? null),
-      borderColor: dataset.color,
-      backgroundColor: dataset.color,
-      borderWidth: 2,
-      pointRadius: 0,
-      pointHoverRadius: 3,
-      tension: 0.25,
-    }));
-    const config = {
-      type: "line",
-      data: { labels: rows.map(labelFor), datasets: dataSets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { intersect: false, mode: "index" },
-        plugins: {
-          legend: { labels: { boxWidth: 10, boxHeight: 10 } },
-          tooltip: { backgroundColor: "#1c1917", borderColor: "#44403c", borderWidth: 1, callbacks: extraOptions.tooltipCallbacks || {} },
-        },
-        scales: {
-          x: { ticks: { color: "#78716c", maxTicksLimit: 6 }, grid: { color: "rgba(120, 113, 108, 0.22)" } },
-          y: { beginAtZero: true, ticks: { color: "#78716c" }, grid: { color: "rgba(120, 113, 108, 0.22)" } },
-        },
-      },
-    };
-    if (charts[canvasId]) {
-      charts[canvasId].data = config.data;
-      charts[canvasId].update();
-    } else {
-      charts[canvasId] = new Chart(document.getElementById(canvasId), config);
-    }
-  }
-
   async function loadCharts(windowKey = "last_1000") {
     const payload = await (await fetch(`/api/monitors/${monitorId}/charts?window=${encodeURIComponent(windowKey)}`)).json();
     document.getElementById("chart-window-label").textContent = `${payload.window} · ${payload.bucket}`;
-    buildLineChart("connections-chart", payload.connections, [{ label: "Current", key: "current", color: "#34d399" }], {
-      tooltipCallbacks: {
-        afterBody(items) {
-          const row = payload.connections[items[0].dataIndex] || {};
-          return [`Available: ${row.available ?? "--"}`, `Total created: ${row.total_created ?? "--"}`, `Rejected: ${row.rejected ?? "--"}`, `Active: ${row.active ?? "--"}`, `Samples: ${row.samples ?? 1}`];
-        },
-      },
-    });
-    buildLineChart("current-ops-chart", payload.current_ops, [
-      { label: "Active", key: "active_count", color: "#fbbf24" },
-      { label: "Total", key: "total_count", color: "#a78bfa" },
-    ]);
-    buildLineChart("server-checks-chart", payload.server_checks, [{ label: "Latency ms", key: "latency_ms", color: "#fb7185" }]);
+    buildConnectionChart(payload.connections);
+    buildCurrentOpsChart(payload.current_ops);
+    buildServerChecksChart(payload.server_checks, payload.bucket);
   }
 
-  document.getElementById("metric-window").addEventListener("change", (event) => loadCharts(event.target.value));
+  // ── Actions ───────────────────────────────────────────────────────────────
+
+  document.getElementById("metric-window").addEventListener("change", e => loadCharts(e.target.value));
+
   document.getElementById("check-now").addEventListener("click", async () => {
     await fetch(`/api/monitors/${monitorId}/check`, { method: "POST" });
     const msg = document.getElementById("check-message");
@@ -182,20 +338,15 @@
     msg.classList.remove("hidden");
     setTimeout(() => { loadMonitor(); loadCharts(document.getElementById("metric-window").value); }, 1600);
   });
+
   document.getElementById("delete-target").addEventListener("click", async () => {
     const name = document.getElementById("monitor-name").textContent || "this target";
     if (!window.confirm(`Delete ${name}? This permanently deletes the target and all old monitoring data.`)) return;
-
     const button = document.getElementById("delete-target");
     button.disabled = true;
     button.textContent = "Deleting...";
-
     const response = await fetch(`/api/monitors/${monitorId}`, { method: "DELETE" });
-    if (response.ok) {
-      window.location.href = "/";
-      return;
-    }
-
+    if (response.ok) { window.location.href = "/"; return; }
     const msg = document.getElementById("check-message");
     msg.textContent = "Delete failed. The target may have already been removed.";
     msg.className = "mb-4 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200";
