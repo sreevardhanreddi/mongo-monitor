@@ -1,7 +1,4 @@
 {% extends "base.html" %}
-{% block head %}
-<script src="https://unpkg.com/gridjs@6/dist/gridjs.umd.js"></script>
-{% endblock %}
 {% block content %}
 <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
   <div>
@@ -9,164 +6,327 @@
     <h1 class="mt-2 text-2xl font-semibold text-stone-50">Current Ops</h1>
     <p id="ops-summary" class="mt-1 text-sm text-stone-500">Loading...</p>
   </div>
-  <button id="refresh-ops"
-    class="rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-stone-950 hover:bg-emerald-400">Refresh</button>
+  <div class="flex flex-wrap items-center justify-end gap-2">
+    <div class="flex items-center gap-2 text-sm">
+      <label for="auto-select" class="text-stone-500">Auto</label>
+      <select id="auto-select"
+        class="rounded border border-stone-700 bg-stone-950 px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-emerald-500">
+        <option value="0">Off</option>
+        <option value="15">15s</option>
+        <option value="30">30s</option>
+        <option value="60">60s</option>
+      </select>
+      <span id="auto-countdown" class="hidden text-xs text-stone-500"></span>
+    </div>
+    <button id="refresh-ops"
+      class="rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-stone-950 hover:bg-emerald-400">Refresh</button>
+  </div>
 </div>
 
 <section class="rounded-lg border border-stone-800 bg-stone-900 overflow-hidden">
+
+  <!-- Breakdown pills -->
+  <div class="space-y-2 border-b border-stone-800 p-4">
+    <div class="flex flex-wrap items-center gap-2 min-h-[28px]">
+      <span class="w-24 shrink-0 text-xs text-stone-500">Client IPs</span>
+      <div id="pill-ips" class="flex flex-wrap gap-1.5"></div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 min-h-[28px]">
+      <span class="w-24 shrink-0 text-xs text-stone-500">Op types</span>
+      <div id="pill-ops" class="flex flex-wrap gap-1.5"></div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 min-h-[28px]">
+      <span class="w-24 shrink-0 text-xs text-stone-500">Namespaces</span>
+      <div id="pill-ns" class="flex flex-wrap gap-1.5"></div>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
   <div class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-800 p-4">
     <div class="text-sm text-stone-400">
-      <span id="ops-visible-count">0</span><span> visible of </span><span id="ops-total-count">0</span><span> sampled
-        ops</span>
+      <span id="ops-visible-count">0</span><span class="text-stone-600"> of </span><span
+        id="ops-total-count">0</span><span class="text-stone-600"> ops</span>
     </div>
-    <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+    <div class="flex flex-wrap items-center gap-2">
+      <button id="toggle-meta"
+        class="rounded border border-stone-700 px-2.5 py-1.5 text-xs text-stone-400 hover:text-stone-200">Show client
+        info</button>
       <input id="ops-search"
-        class="w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none focus:border-emerald-500 sm:w-80"
-        placeholder="Search ops">
+        class="w-64 rounded-md border border-stone-700 bg-stone-950 px-3 py-1.5 text-sm text-stone-100 outline-none focus:border-emerald-500"
+        placeholder="Search ops…">
     </div>
   </div>
-  <div id="client-ip-counts" class="flex flex-wrap gap-2 border-b border-stone-800 p-4 text-sm text-stone-300">
-    <span class="text-stone-500">No client IPs</span>
+
+  <!-- Table -->
+  <div class="overflow-x-auto">
+    <div class="max-h-[600px] overflow-y-auto">
+      <table id="ops-table" class="w-full min-w-[900px] text-sm">
+        <thead class="sticky top-0 z-10 bg-stone-900 text-left text-xs text-stone-500">
+          <tr id="ops-thead"></tr>
+        </thead>
+        <tbody id="ops-tbody">
+          <tr>
+            <td colspan="20" class="px-4 py-8 text-center text-stone-600">Loading…</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
-  <div id="ops-grid"></div>
+
 </section>
+
+<style>
+  #ops-table:not(.show-meta) .col-meta {
+    display: none;
+  }
+
+  #ops-thead th {
+    user-select: none;
+  }
+</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
   const monitorId = "{{ monitor_id }}";
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let allOps = [];
+  let sortState = { key: 'secs_running', dir: 'desc' };
+  let showMeta = false;
+  let autoSecs = 0;
+  let autoTimer = null;
+  let countdown = 0;
+
+  // ── DOM refs ───────────────────────────────────────────────────────────────
   const searchInput = document.getElementById('ops-search');
   const visibleCount = document.getElementById('ops-visible-count');
   const totalCount = document.getElementById('ops-total-count');
-  const clientIpCounts = document.getElementById('client-ip-counts');
-  let allOps = [];
-  let searchTimer = null;
+  const tbody = document.getElementById('ops-tbody');
+  const thead = document.getElementById('ops-thead');
+  const opsTable = document.getElementById('ops-table');
+  const countdownEl = document.getElementById('auto-countdown');
+  const toggleMetaBtn = document.getElementById('toggle-meta');
 
-  const grid = new gridjs.Grid({
-    columns: [
-      { name: 'Client', sort: true },
-      { name: 'App', sort: true },
-      { name: 'Driver', sort: true },
-      { name: 'Platform', sort: true },
-      { name: 'OS', sort: true },
-      { name: 'Arch', sort: true },
-      { name: 'OS Version', sort: true },
-      { name: 'Container', sort: true },
-      { name: 'User', sort: true },
-      { name: 'Namespace', sort: true },
-      { name: 'Operation', sort: true },
-      { name: 'Command', sort: true },
-      { name: 'Running', sort: true, formatter: (cell) => cell != null ? `${Number(cell).toFixed(2)}s` : '--' },
-      { name: 'Active', sort: true, formatter: (cell) => String(cell ?? '--') },
-      { name: 'Lock', sort: true, formatter: (cell) => String(cell ?? '--') },
-      { name: 'Description', sort: true },
-    ],
-    data: [],
-    sort: true,
-    language: {
-      noRecordsFound: 'No current operation sample yet. Click Refresh to collect one.',
-      loading: 'Loading…',
-    },
-  }).render(document.getElementById('ops-grid'));
+  // ── Column definitions ─────────────────────────────────────────────────────
+  const COLS = [
+    { key: 'secs_running', label: 'Running', type: 'number', defaultDir: 'desc' },
+    { key: 'active', label: 'Active', type: 'bool' },
+    { key: 'waiting_for_lock', label: 'Lock', type: 'bool' },
+    { key: 'operation', label: 'Op', type: 'string' },
+    { key: 'namespace', label: 'Namespace', type: 'string' },
+    { key: 'command', label: 'Command', type: 'string' },
+    { key: 'user', label: 'User', type: 'string' },
+    { key: 'client', label: 'Client', type: 'string' },
+    { key: 'app_name', label: 'App', type: 'string' },
+    { key: 'driver', label: 'Driver', type: 'string' },
+    { key: 'desc', label: 'Description', type: 'string' },
+    { key: 'platform', label: 'Platform', type: 'string', meta: true },
+    { key: 'os_name', label: 'OS', type: 'string', meta: true },
+    { key: 'os_architecture', label: 'Arch', type: 'string', meta: true },
+    { key: 'os_version', label: 'OS Ver', type: 'string', meta: true },
+    { key: 'container_runtime', label: 'Container', type: 'string', meta: true },
+  ];
 
-  function toRow(op) {
-    return [
-      op.client || '--',
-      op.app_name || '--',
-      op.driver || '--',
-      op.platform || '--',
-      op.os_name || '--',
-      op.os_architecture || '--',
-      op.os_version || '--',
-      op.container_runtime || '--',
-      op.user || '--',
-      op.namespace || '--',
-      op.operation || '--',
-      op.command || '--',
-      op.secs_running ?? null,
-      op.active,
-      op.waiting_for_lock,
-      op.desc || '--',
-    ];
+  // ── Formatting helpers ─────────────────────────────────────────────────────
+  const LONG_SECS = 10;
+
+  function fmtDuration(secs) {
+    if (secs == null) return '<span class="text-stone-600">--</span>';
+    let cls, text;
+    if (secs >= 60) {
+      cls = 'text-red-400 font-semibold';
+      text = `${Math.floor(secs / 60)}m ${Math.floor(secs % 60)}s`;
+    } else if (secs >= LONG_SECS) {
+      cls = 'text-amber-400';
+      text = `${Math.floor(secs)}s`;
+    } else {
+      cls = 'text-emerald-400';
+      text = secs < 1 ? `${secs.toFixed(2)}s` : `${Math.floor(secs)}s`;
+    }
+    return `<span class="${cls}">${text}</span>`;
+  }
+
+  function fmtBool(val, trueClass = 'text-emerald-400', falseClass = 'text-stone-600') {
+    if (val === null || val === undefined) return '<span class="text-stone-600">--</span>';
+    return `<span class="${val ? trueClass : falseClass}">${val ? 'Yes' : 'No'}</span>`;
+  }
+
+  function fmtStr(val) {
+    return val ? App.esc(String(val)) : '<span class="text-stone-600">--</span>';
+  }
+
+  function cellHtml(col, op) {
+    const v = op[col.key];
+    if (col.key === 'secs_running') return fmtDuration(v);
+    if (col.key === 'active') return fmtBool(v, 'text-emerald-400', 'text-stone-600');
+    if (col.key === 'waiting_for_lock') return fmtBool(v, 'text-red-400', 'text-stone-600');
+    return fmtStr(v);
+  }
+
+  function rowClass(op) {
+    if (op.waiting_for_lock) return 'border-l-2 border-l-red-600 bg-red-950/40';
+    if (op.active && (op.secs_running ?? 0) >= LONG_SECS) return 'border-l-2 border-l-amber-500 bg-amber-950/25';
+    return 'border-l-2 border-l-transparent hover:bg-stone-800/30';
+  }
+
+  function sortValue(op, col) {
+    const v = op[col.key];
+    if (col.type === 'number') return v ?? -1;
+    if (col.type === 'bool') return v === true ? 1 : v === false ? 0 : -1;
+    return String(v ?? '').toLowerCase();
+  }
+
+  // ── Pill rendering ─────────────────────────────────────────────────────────
+  function pill(label, count) {
+    return `<span class="inline-flex items-center gap-1.5 rounded border border-stone-700 bg-stone-950 px-2 py-0.5 text-xs">
+      <span class="text-stone-200">${App.esc(String(label))}</span>
+      <span class="text-stone-500">${count}</span>
+    </span>`;
+  }
+
+  function countBy(ops, fn) {
+    const map = new Map();
+    for (const op of ops) {
+      const k = fn(op) || '(none)';
+      map.set(k, (map.get(k) || 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   }
 
   function clientIpFor(op) {
-    const client = String(op.client || '').trim();
-    if (!client) return '--';
-    if (client.startsWith('[')) {
-      const closingBracket = client.indexOf(']');
-      return closingBracket > 0 ? client.slice(1, closingBracket) : client;
-    }
-    const host = client.split(':')[0];
-    return host || client;
+    const c = String(op.client || '').trim();
+    if (!c) return '(none)';
+    if (c.startsWith('[')) { const i = c.indexOf(']'); return i > 0 ? c.slice(1, i) : c; }
+    return c.split(':')[0] || c;
   }
 
-  function renderClientIpCounts(ops) {
-    const counts = ops.reduce((grouped, op) => {
-      const clientIp = clientIpFor(op);
-      grouped.set(clientIp, (grouped.get(clientIp) || 0) + 1);
-      return grouped;
-    }, new Map());
-    const sortedCounts = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  function renderPills(id, entries) {
+    const el = document.getElementById(id);
+    el.innerHTML = entries.length
+      ? entries.map(([k, n]) => pill(k, n)).join('')
+      : '<span class="text-xs text-stone-600">—</span>';
+  }
 
-    if (!sortedCounts.length) {
-      clientIpCounts.innerHTML = '<span class="text-stone-500">No client IPs</span>';
+  // ── Table rendering ────────────────────────────────────────────────────────
+  function renderHeader() {
+    thead.innerHTML = COLS.map(col => {
+      const metaCls = col.meta ? 'col-meta' : '';
+      const active = sortState.key === col.key;
+      const indicator = active ? (sortState.dir === 'asc' ? ' ↑' : ' ↓') : '';
+      return `<th class="px-3 py-2.5 font-medium whitespace-nowrap ${metaCls}">
+        <button class="sort-btn hover:text-stone-200" data-key="${col.key}" data-default="${col.defaultDir || 'asc'}" type="button">
+          ${App.esc(col.label)}<span class="text-emerald-400">${indicator}</span>
+        </button>
+      </th>`;
+    }).join('');
+
+    thead.querySelectorAll('.sort-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.key;
+        if (sortState.key === key) {
+          sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortState = { key, dir: btn.dataset.default || 'asc' };
+        }
+        renderHeader();
+        renderRows(currentFiltered());
+      });
+    });
+  }
+
+  function renderRows(ops) {
+    if (!ops.length) {
+      tbody.innerHTML = `<tr><td colspan="${COLS.length}" class="px-4 py-8 text-center text-stone-600">No ops match the current filter.</td></tr>`;
       return;
     }
+    const col = COLS.find(c => c.key === sortState.key) || COLS[0];
+    const sorted = [...ops].sort((a, b) => {
+      const av = sortValue(a, col), bv = sortValue(b, col);
+      const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
+      return sortState.dir === 'asc' ? cmp : -cmp;
+    });
+    tbody.innerHTML = sorted.map(op => {
+      const cells = COLS.map(c => {
+        const metaCls = c.meta ? 'col-meta' : '';
+        return `<td class="px-3 py-2 whitespace-nowrap ${metaCls}">${cellHtml(c, op)}</td>`;
+      }).join('');
+      return `<tr class="${rowClass(op)} transition-colors">${cells}</tr>`;
+    }).join('');
+  }
 
-    clientIpCounts.innerHTML = sortedCounts.map(([clientIp, count]) => `
-      <span class="inline-flex items-center gap-2 rounded-md border border-stone-700 bg-stone-950 px-2.5 py-1">
-        <span class="font-medium text-stone-100">${App.esc(clientIp)}</span>
-        <span class="text-stone-500">${App.formatNumber(count)}</span>
-      </span>
-    `).join('');
+  // ── Filter ─────────────────────────────────────────────────────────────────
+  const SEARCH_KEYS = ['client', 'app_name', 'driver', 'platform', 'os_name', 'os_version',
+    'os_architecture', 'container_runtime', 'user', 'namespace', 'operation', 'command', 'desc'];
+
+  function currentFiltered() {
+    const q = searchInput.value.trim().toLowerCase();
+    return allOps.filter(op => {
+      if (!q) return true;
+      return SEARCH_KEYS.map(k => op[k] || '').join(' ').toLowerCase().includes(q);
+    });
   }
 
   function applyFilter() {
-    const query = searchInput.value.trim().toLowerCase();
-    const filtered = allOps.filter((op) => {
-      const searchText = [
-        op.client,
-        op.app_name,
-        op.driver,
-        op.platform,
-        op.os_name,
-        op.os_version,
-        op.os_architecture,
-        op.container_runtime,
-        op.user,
-        op.namespace,
-        op.operation,
-        op.command,
-        op.desc,
-      ].join(' ').toLowerCase();
-      return !query || searchText.includes(query);
-    });
+    const filtered = currentFiltered();
     visibleCount.textContent = filtered.length;
-    renderClientIpCounts(filtered);
-    grid.updateConfig({ data: filtered.map(toRow) }).forceRender();
+    renderPills('pill-ips', countBy(filtered, clientIpFor));
+    renderPills('pill-ops', countBy(filtered, op => op.operation));
+    renderPills('pill-ns', countBy(filtered, op => op.namespace));
+    renderRows(filtered);
   }
 
+  // ── Load ───────────────────────────────────────────────────────────────────
   async function loadOps() {
+    if (autoSecs) countdown = autoSecs;
     const [monitor, ops] = await Promise.all([
       fetch(`/api/monitors/${monitorId}`).then(r => r.json()),
       fetch(`/api/monitors/${monitorId}/current-ops`).then(r => r.json()),
     ]);
-    document.getElementById('ops-summary').textContent = `${monitor.name} · ${ops.active_count} active · ${ops.total_count} total · ${App.formatDateTime(ops.checked_at, { empty: 'not collected' })}`;
+    document.getElementById('ops-summary').textContent =
+      `${monitor.name} · ${ops.active_count} active · ${ops.total_count} total · ${App.formatDateTime(ops.checked_at, { empty: 'not collected' })}`;
     allOps = ops.rows || [];
     totalCount.textContent = allOps.length;
     applyFilter();
   }
 
-  searchInput.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(applyFilter, 250);
-  });
+  // ── Auto-refresh ───────────────────────────────────────────────────────────
+  function startAuto(secs) {
+    clearInterval(autoTimer);
+    autoSecs = secs;
+    if (!secs) { countdownEl.classList.add('hidden'); return; }
+    countdown = secs;
+    countdownEl.textContent = `Next in ${countdown}s`;
+    countdownEl.classList.remove('hidden');
+    autoTimer = setInterval(() => {
+      countdown--;
+      countdownEl.textContent = `Next in ${countdown}s`;
+      if (countdown <= 0) loadOps();
+    }, 1000);
+  }
+
+  // ── Column visibility ──────────────────────────────────────────────────────
+  function toggleMeta() {
+    showMeta = !showMeta;
+    opsTable.classList.toggle('show-meta', showMeta);
+    toggleMetaBtn.textContent = showMeta ? 'Hide client info' : 'Show client info';
+    toggleMetaBtn.classList.toggle('border-emerald-700', showMeta);
+    toggleMetaBtn.classList.toggle('text-emerald-400', showMeta);
+    toggleMetaBtn.classList.toggle('border-stone-700', !showMeta);
+    toggleMetaBtn.classList.toggle('text-stone-400', !showMeta);
+  }
+
+  // ── Event listeners ────────────────────────────────────────────────────────
+  searchInput.addEventListener('input', () => applyFilter());
+  toggleMetaBtn.addEventListener('click', toggleMeta);
+  document.getElementById('auto-select').addEventListener('change', e => startAuto(Number(e.target.value)));
   document.getElementById('refresh-ops').addEventListener('click', async () => {
     await fetch(`/api/monitors/${monitorId}/check`, { method: 'POST' });
     setTimeout(loadOps, 1500);
   });
 
+  // ── Init ───────────────────────────────────────────────────────────────────
+  renderHeader();
   loadOps();
 </script>
 {% endblock %}
