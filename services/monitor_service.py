@@ -361,6 +361,7 @@ def latest_current_ops_rows(monitor_id: str) -> dict[str, Any]:
             for user in users
             if isinstance(user, dict) and user.get("user")
         ]
+        os_info = _nested(op, "clientMetadata", "os") or {}
         rows.append(
             {
                 "opid": str(op.get("opid") or ""),
@@ -376,6 +377,13 @@ def latest_current_ops_rows(monitor_id: str) -> dict[str, Any]:
                     if part
                 ),
                 "platform": _nested(op, "clientMetadata", "platform") or "",
+                "os_name": os_info.get("name") or os_info.get("type") or "",
+                "os_version": os_info.get("version") or "",
+                "os_architecture": os_info.get("architecture") or "",
+                "container_runtime": _nested(
+                    op, "clientMetadata", "env", "container", "runtime"
+                )
+                or "",
                 "user": ", ".join(user_names),
                 "namespace": op.get("ns") or "",
                 "operation": op.get("op") or "",

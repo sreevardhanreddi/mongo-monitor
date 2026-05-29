@@ -93,6 +93,10 @@ class CurrentOpRowOut(_Base):
     app_name: str
     driver: str
     platform: str
+    os_name: str
+    os_version: str
+    os_architecture: str
+    container_runtime: str
     user: str
     namespace: str
     operation: str

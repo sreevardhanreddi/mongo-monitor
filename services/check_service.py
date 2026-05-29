@@ -154,7 +154,9 @@ def collect_current_ops(monitor: dict[str, Any]) -> dict[str, Any]:
         ]
         try:
             inserted_samples = len(
-                db.current_op_samples.insert_many(sample_docs, ordered=False).inserted_ids
+                db.current_op_samples.insert_many(
+                    sample_docs, ordered=False
+                ).inserted_ids
             )
         except Exception:
             # ordered=False already inserts what it can; BulkWriteError still
