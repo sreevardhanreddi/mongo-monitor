@@ -8,6 +8,7 @@ from services.check_service import (
     collect_database_and_collection_stats,
     collect_server_status,
 )
+from services.monitor_service import MONITOR_DATA_COLLECTIONS
 
 
 def _monitor_or_none(monitor_id: str):
@@ -70,3 +71,18 @@ def collect_monitor_snapshot(monitor_id: str) -> None:
     collect_connection_count_task.delay(monitor_id)
     collect_current_ops_task.delay(monitor_id)
     collect_storage_stats_task.delay(monitor_id)
+
+
+@celery_app.task(name="tasks.monitoring.delete_monitor_data")
+def delete_monitor_data_task(monitor_id: str):
+    db = get_metadata_db()
+    deleted_counts = {
+        collection: db[collection]
+        .delete_many({"monitor_id": ObjectId(monitor_id)})
+        .deleted_count
+        for collection in MONITOR_DATA_COLLECTIONS
+    }
+    deleted_counts["monitor_status"] = db.monitor_status.delete_many(
+        {"monitor_id": ObjectId(monitor_id)}
+    ).deleted_count
+    return {"monitor_id": monitor_id, "deleted_counts": deleted_counts}

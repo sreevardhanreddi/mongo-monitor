@@ -57,17 +57,19 @@ def list_monitors() -> list[dict[str, Any]]:
     for doc in db.monitors.find().sort("name", 1):
         monitor = serialize_doc(doc) or {}
         monitor = _with_display_uri(monitor)
-        status = db.monitor_status.find_one({"monitor_id": monitor["id"]})
+        status = db.monitor_status.find_one({"monitor_id": ObjectId(monitor["id"])})
         monitor["status"] = serialize_doc(status)
         monitor["latest_connection_count"] = serialize_doc(
             db.connection_counts.find_one(
-                {"monitor_id": monitor["id"]}, sort=[("checked_at", DESCENDING)]
+                {"monitor_id": ObjectId(monitor["id"])},
+                sort=[("checked_at", DESCENDING)],
             )
         )
         current_ops = (
             serialize_doc(
                 db.current_ops.find_one(
-                    {"monitor_id": monitor["id"]}, sort=[("checked_at", DESCENDING)]
+                    {"monitor_id": ObjectId(monitor["id"])},
+                    sort=[("checked_at", DESCENDING)],
                 )
             )
             or {}
@@ -89,7 +91,7 @@ def get_monitor(monitor_id: str) -> dict[str, Any] | None:
     if monitor:
         monitor = _with_display_uri(monitor)
         monitor["status"] = serialize_doc(
-            db.monitor_status.find_one({"monitor_id": monitor_id})
+            db.monitor_status.find_one({"monitor_id": ObjectId(monitor_id)})
         )
     return monitor
 
@@ -115,24 +117,26 @@ def delete_monitor(monitor_id: str) -> dict[str, Any] | None:
     if not monitor:
         return None
 
-    deleted_counts = {
-        collection: db[collection].delete_many({"monitor_id": monitor_id}).deleted_count
-        for collection in MONITOR_DATA_COLLECTIONS
+    deleted_count = db.monitors.delete_one({"_id": ObjectId(monitor_id)}).deleted_count
+    if not deleted_count:
+        return None
+
+    from tasks.monitoring import delete_monitor_data_task
+
+    task = delete_monitor_data_task.delay(monitor_id)
+    return {
+        "deleted": True,
+        "deleted_counts": {"monitors": deleted_count},
+        "cleanup_enqueued": True,
+        "cleanup_task_id": task.id,
     }
-    deleted_counts["monitor_status"] = db.monitor_status.delete_many(
-        {"monitor_id": monitor_id}
-    ).deleted_count
-    deleted_counts["monitors"] = db.monitors.delete_one(
-        {"_id": ObjectId(monitor_id)}
-    ).deleted_count
-    return {"deleted": True, "deleted_counts": deleted_counts}
 
 
 def latest_metric(collection: str, monitor_id: str) -> dict[str, Any] | None:
     db = get_metadata_db()
     return serialize_doc(
         db[collection].find_one(
-            {"monitor_id": monitor_id}, sort=[("checked_at", DESCENDING)]
+            {"monitor_id": ObjectId(monitor_id)}, sort=[("checked_at", DESCENDING)]
         )
     )
 
@@ -144,7 +148,7 @@ def recent_metrics(
     return [
         serialize_doc(doc) or {}
         for doc in db[collection]
-        .find({"monitor_id": monitor_id})
+        .find({"monitor_id": ObjectId(monitor_id)})
         .sort("checked_at", DESCENDING)
         .limit(limit)
     ]
@@ -157,7 +161,7 @@ def _recent_chart_rows(
     docs = list(
         db[collection]
         .find(
-            {"monitor_id": monitor_id},
+            {"monitor_id": ObjectId(monitor_id)},
             {"checked_at": 1, **{field: 1 for field in fields}},
         )
         .sort("checked_at", DESCENDING)
@@ -191,7 +195,7 @@ def _hourly_chart_rows(
         }
 
     pipeline = [
-        {"$match": {"monitor_id": monitor_id, "checked_at": {"$gte": since}}},
+        {"$match": {"monitor_id": ObjectId(monitor_id), "checked_at": {"$gte": since}}},
         {
             "$group": {
                 "_id": {
@@ -293,7 +297,7 @@ def chart_metrics(monitor_id: str, window: str = "last_1000") -> dict[str, Any]:
 def latest_database_stats(monitor_id: str) -> list[dict[str, Any]]:
     db = get_metadata_db()
     pipeline = [
-        {"$match": {"monitor_id": monitor_id}},
+        {"$match": {"monitor_id": ObjectId(monitor_id)}},
         {"$sort": {"checked_at": DESCENDING}},
         {"$group": {"_id": "$database_name", "doc": {"$first": "$$ROOT"}}},
         {"$replaceRoot": {"newRoot": "$doc"}},
@@ -306,7 +310,7 @@ def latest_collection_stats(
     monitor_id: str, database_name: str | None = None
 ) -> list[dict[str, Any]]:
     db = get_metadata_db()
-    match: dict[str, Any] = {"monitor_id": monitor_id}
+    match: dict[str, Any] = {"monitor_id": ObjectId(monitor_id)}
     if database_name:
         match["database_name"] = database_name
     pipeline = [
@@ -403,7 +407,7 @@ def collection_storage_trend(
 
     db = get_metadata_db()
     match = {
-        "monitor_id": monitor_id,
+        "monitor_id": ObjectId(monitor_id),
         "database_name": database_name,
         "collection_name": collection_name,
         "ok": True,

@@ -24,7 +24,7 @@ def collect_server_status(monitor: dict[str, Any]) -> dict[str, Any]:
     started = perf_counter()
     checked_at = _now()
     db = get_metadata_db()
-    monitor_id = str(monitor["_id"])
+    monitor_id = monitor["_id"]
     try:
         client = MongoClient(
             decrypt_uri(monitor["uri"]),
@@ -58,7 +58,7 @@ def collect_server_status(monitor: dict[str, Any]) -> dict[str, Any]:
         )
         client.close()
         return {
-            "monitor_id": monitor_id,
+            "monitor_id": str(monitor_id),
             "ok": True,
             "latency_ms": latency_ms,
             "checked_at": checked_at.isoformat(),
@@ -87,7 +87,7 @@ def collect_server_status(monitor: dict[str, Any]) -> dict[str, Any]:
             upsert=True,
         )
         return {
-            "monitor_id": monitor_id,
+            "monitor_id": str(monitor_id),
             "ok": False,
             "latency_ms": latency_ms,
             "error": str(exc),
@@ -103,7 +103,7 @@ def collect_connection_count(monitor: dict[str, Any]) -> dict[str, Any]:
     status = client.admin.command("serverStatus")
     connections = status.get("connections", {})
     doc = {
-        "monitor_id": str(monitor["_id"]),
+        "monitor_id": monitor["_id"],
         "current": connections.get("current", 0),
         "available": connections.get("available", 0),
         "total_created": connections.get("totalCreated", 0),
@@ -114,7 +114,7 @@ def collect_connection_count(monitor: dict[str, Any]) -> dict[str, Any]:
     get_metadata_db().connection_counts.insert_one(doc)
     client.close()
     return {
-        "monitor_id": doc["monitor_id"],
+        "monitor_id": str(doc["monitor_id"]),
         "current": doc["current"],
         "available": doc["available"],
         "total_created": doc["total_created"],
@@ -133,7 +133,7 @@ def collect_current_ops(monitor: dict[str, Any]) -> dict[str, Any]:
     inprog = current_op.get("inprog", [])
     active_ops = [op for op in inprog if op.get("active")]
     doc = {
-        "monitor_id": str(monitor["_id"]),
+        "monitor_id": monitor["_id"],
         "active_count": len(active_ops),
         "total_count": len(inprog),
         "sample": inprog,
@@ -142,7 +142,7 @@ def collect_current_ops(monitor: dict[str, Any]) -> dict[str, Any]:
     get_metadata_db().current_ops.insert_one(doc)
     client.close()
     return {
-        "monitor_id": doc["monitor_id"],
+        "monitor_id": str(doc["monitor_id"]),
         "active_count": doc["active_count"],
         "total_count": doc["total_count"],
         "sample_count": len(doc["sample"]),
@@ -156,7 +156,7 @@ def collect_database_and_collection_stats(monitor: dict[str, Any]) -> dict[str, 
         serverSelectionTimeoutMS=monitor.get("timeout_ms", 2500),
     )
     metadata_db = get_metadata_db()
-    monitor_id = str(monitor["_id"])
+    monitor_id = monitor["_id"]
     checked_at = _now()
     database_docs = []
     collection_docs = []
@@ -221,7 +221,7 @@ def collect_database_and_collection_stats(monitor: dict[str, Any]) -> dict[str, 
         metadata_db.collection_stats.insert_many(collection_docs)
     client.close()
     return {
-        "monitor_id": monitor_id,
+        "monitor_id": str(monitor_id),
         "database_count": len(database_docs),
         "collection_count": len(collection_docs),
         "checked_at": checked_at.isoformat(),
