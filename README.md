@@ -106,28 +106,3 @@ AUTH_PASSWORD=change-me
 ```bash
 docker compose -f docker-compose.prod.yml up --build -d
 ```
-
-The production compose removes source bind mounts and keeps named volumes for Redis and metadata MongoDB.
-
-## API
-
-- `GET /api/health`
-- `GET /api/monitors`
-- `POST /api/monitors`
-- `GET /api/monitors/{monitor_id}`
-- `PATCH /api/monitors/{monitor_id}`
-- `DELETE /api/monitors/{monitor_id}`
-- `POST /api/monitors/{monitor_id}/check`
-- `GET /api/monitors/{monitor_id}/metrics/{collection}`
-- `GET /api/monitors/{monitor_id}/database-stats`
-- `GET /api/monitors/{monitor_id}/collection-stats`
-- `GET /api/monitors/{monitor_id}/collection-storage-trend`
-- `GET /api/monitors/{monitor_id}/current-ops`
-
-Metric collections:
-
-- `server_statuses`
-- `connection_counts`
-- `current_ops`
-- `database_stats`
-- `collection_stats`
