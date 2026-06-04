@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://redis:6379/1"
     monitor_interval_seconds: int = Field(default=30, ge=5)
     storage_stats_interval_seconds: int = Field(default=300, ge=60)
+    current_op_samples_ttl_seconds: int = Field(default=86400, ge=1)
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"

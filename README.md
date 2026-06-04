@@ -90,6 +90,7 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `CELERY_RESULT_BACKEND` | `redis://redis:6379/1` | Redis URL used to store Celery task results |
 | `MONITOR_INTERVAL_SECONDS` | `30` | How often (seconds) the worker runs server-status, connection-count, and current-ops checks. Minimum `5` |
 | `STORAGE_STATS_INTERVAL_SECONDS` | `300` | How often (seconds) the worker collects database and collection storage stats. Minimum `60` |
+| `CURRENT_OP_SAMPLES_TTL_SECONDS` | `86400` | Retention period in seconds for current operation sample documents. Default is 1 day |
 
 ## Optional Basic Auth
 
